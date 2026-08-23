@@ -1,0 +1,44 @@
+
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String
+  createdAt DateTime @default(now())
+
+  messages  Message[]
+  rooms     Room[]
+}
+
+model Room {
+  id        String   @id @default(cuid())
+  roomId    String   @unique
+  isPrivate Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  createdBy   User   @relation(fields: [createdById], references: [id])
+  createdById String
+
+  messages  Message[]
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  text      String
+  createdAt DateTime @default(now())
+
+  sender    User   @relation(fields: [senderId], references: [id])
+  senderId  String
+
+  room      Room   @relation(fields: [roomId], references: [id])
+  roomId    String
+}

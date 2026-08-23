@@ -2,7 +2,7 @@ import { WebSocket } from "ws";
 import type { IncomingMessage } from "../types/index.js";
 import { AddClient, getClientBySocket, getClientsInRoom } from "./roomManager.js";
 
-export function handleMessage(socket: WebSocket, rawMessage: string) {
+export function handleMessage(socket: WebSocket, rawMessage: string,username: string) {
   
   // Error handling — if JSON is broken, don't crash
   let data: IncomingMessage;
@@ -15,22 +15,22 @@ export function handleMessage(socket: WebSocket, rawMessage: string) {
 
   // Route to the right handler based on message type
   if (data.type === "join") {
-    handleJoin(socket, data.payload.roomId, data.payload.username);
+    handleJoin(socket, data.payload.roomId, username);
     return;
   }
 
   if (data.type === "chat") {
-    handleChat(socket, data.payload.message);
+    handleChat(socket, data.payload.message, username);
     return;
   }
 
   if (data.type === "typing") {
-  handleTyping(socket);
+  handleTyping(socket, username);
   return;
 }
 
 if (data.type === "stop_typing") {
-  handleStopTyping(socket);
+  handleStopTyping(socket, username);
   return;
 }
 }
@@ -74,7 +74,7 @@ socket.send(
 }
 
 // When someone sends a chat message
-function handleChat(socket: WebSocket, message: string) {
+function handleChat(socket: WebSocket, message: string, username: string) {
   
   // Find out who sent this
   const sender = getClientBySocket(socket);
@@ -95,7 +95,7 @@ function handleChat(socket: WebSocket, message: string) {
       JSON.stringify({
         type: "CHAT",
         payload: {
-          username: sender.username,
+          username: username,
           message,
           timestamp: new Date().toISOString(),
         },
@@ -107,7 +107,7 @@ function handleChat(socket: WebSocket, message: string) {
 
 
 
-function handleTyping(socket: WebSocket) {
+function handleTyping(socket: WebSocket,username: string) {
   const sender = getClientBySocket(socket);
   if (!sender) return;
 
@@ -119,7 +119,7 @@ function handleTyping(socket: WebSocket) {
         JSON.stringify({
           type: "TYPING",
           payload: {
-            username: sender.username,
+            username: username,
           },
         })
       );
@@ -127,7 +127,7 @@ function handleTyping(socket: WebSocket) {
   });
 }
 
-function handleStopTyping(socket: WebSocket) {
+function handleStopTyping(socket: WebSocket, username: string) {
   const sender = getClientBySocket(socket);
   if (!sender) return;
 
@@ -139,7 +139,7 @@ function handleStopTyping(socket: WebSocket) {
         JSON.stringify({
           type: "STOP_TYPING",
           payload: {
-            username: sender.username,
+            username: username,
           },
         })
       );
