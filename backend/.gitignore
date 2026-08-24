@@ -20,3 +20,14 @@ Thumbs.db
 .vscode/
 .idea/
 /src/generated/prisma
+
+
+# AI editor folders
+.agents/
+.claude/
+.windsurf/
+
+# Prisma at root (should only be in backend)
+prisma/
+prisma.config.ts
+skills-lock.json
