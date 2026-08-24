@@ -1,5 +1,8 @@
 import express from "express";
 import { startWebSocketServer } from "./websocket/wsServer.js";
+import roomRoutes from "./routes/roomRoutes.js";
+
+
 import authRoutes from "./routes/authRoutes.js";
 import dotenv from "dotenv";
 
@@ -13,6 +16,7 @@ app.use(express.json());
 
 // Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/rooms", roomRoutes);
 
 // Start Express server
 app.listen(PORT, () => {
