@@ -1,8 +1,9 @@
 import { WebSocket } from "ws";
 import type { IncomingMessage } from "../types/index.js";
 import { AddClient, getClientBySocket, getClientsInRoom } from "./roomManager.js";
+import prisma from "../config/db.js";
 
-export function handleMessage(socket: WebSocket, rawMessage: string,username: string) {
+export async  function handleMessage(socket: WebSocket, rawMessage: string,username: string) {
   
   // Error handling — if JSON is broken, don't crash
   let data: IncomingMessage;
@@ -20,12 +21,12 @@ export function handleMessage(socket: WebSocket, rawMessage: string,username: st
   }
 
   if (data.type === "chat") {
-    handleChat(socket, data.payload.message, username);
+    await handleChat(socket, data.payload.message, username);
     return;
   }
 
   if (data.type === "typing") {
-  handleTyping(socket, username);
+    await handleTyping(socket, username);
   return;
 }
 
@@ -36,28 +37,51 @@ if (data.type === "stop_typing") {
 }
 
 
-function handleJoin(socket: WebSocket, roomId: string, username: string) {
-  
-  
+async function handleJoin(socket: WebSocket, roomId: string, username: string) {
+
+  // Get everyone BEFORE adding the new person
   const roomMembers = getClientsInRoom(roomId);
   const onlineUsers = roomMembers.map((client) => client.username);
-  
-  AddClient(socket, roomId, username);
-// Send confirmation + who's already online
-socket.send(
-  JSON.stringify({
-    type: "JOINED",
-    payload: {
-      roomId,
-      username,
-      message: `You joined room ${roomId} as ${username}`,
-      onlineUsers, // ← this is new
-    },
-  })
-);
 
-  // Tell everyone else in the room someone joined
-  
+  // Now add the new person
+  AddClient(socket, roomId, username);
+let messageHistory: any[] = [];
+try {
+  const messages = await prisma.message.findMany({
+    where: { room: { roomId: roomId } },
+    orderBy: { createdAt: "asc" },
+    take: 50,
+    include: {
+      sender: {
+        select: { username: true }
+      }
+    }
+  });
+  messageHistory = messages.map((msg) => ({
+    username: msg.sender.username,
+    message: msg.text,
+    timestamp: msg.createdAt,
+  }));
+} catch (error) {
+  console.log("Failed to fetch message history:", error);
+}
+
+  // Send confirmation + online users + message history
+  socket.send(
+    JSON.stringify({
+      type: "JOINED",
+      payload: {
+        roomId,
+        username,
+        message: `You joined room ${roomId} as ${username}`,
+        onlineUsers,
+        messageHistory,
+        
+      },
+    })
+  );
+
+  // Tell everyone else someone joined
   roomMembers.forEach((client) => {
     if (client.socket !== socket) {
       client.socket.send(
@@ -73,11 +97,9 @@ socket.send(
   });
 }
 
-// When someone sends a chat message
-function handleChat(socket: WebSocket, message: string, username: string) {
+async function handleChat(socket: WebSocket, message: string, username: string) {
   
-  // Find out who sent this
-  const sender = getClientBySocket(socket);
+   const sender = getClientBySocket(socket);
 
   if (!sender) {
     socket.send(
@@ -86,11 +108,22 @@ function handleChat(socket: WebSocket, message: string, username: string) {
     return;
   }
 
-  // Get everyone in the same room
-  const roomMembers = getClientsInRoom(sender.roomId);
+  // Save message to database
+  await prisma.message.create({
+    data: {
+      text: message,
+      sender: {
+        connect: { username: username }
+      },
+      room: {
+        connect: { roomId: sender.roomId }
+      }
+    }
+  });
 
-  // Broadcast to everyone in the room including sender
-  roomMembers.forEach((client) => {
+  // Broadcast to everyone in the room
+  const roomMembers = getClientsInRoom(sender.roomId);
+   roomMembers.forEach((client) => {
     client.socket.send(
       JSON.stringify({
         type: "CHAT",
