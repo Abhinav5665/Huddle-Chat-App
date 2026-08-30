@@ -48,13 +48,19 @@ export async function login(req: Request, res: Response) {
   try {
     const { username, password } = req.body;
 
+    // Check if username and password are provided
+    if (!username || !password) {
+      res.status(400).json({ message: "Please provide username and password" });
+      return;
+    }
+
     // Find the user
     const user = await prisma.user.findUnique({
       where: { username },
     });
 
     if (!user) {
-      res.status(400).json({ message: "Invalid username or password" });
+      res.status(400).json({ message: "User not found, please signup first" });
       return;
     }
 
@@ -62,7 +68,7 @@ export async function login(req: Request, res: Response) {
     const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
-      res.status(400).json({ message: "Invalid username or password" });
+      res.status(400).json({ message: "Invalid password" });
       return;
     }
 

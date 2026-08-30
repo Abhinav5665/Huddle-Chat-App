@@ -6,7 +6,7 @@ import prisma from "../config/db.js";
 import { IncomingMessage } from "http";
 
 export function startWebSocketServer() {
-  const wss = new WebSocketServer({ port: 8080 });
+  const wss = new WebSocketServer({ port: parseInt(process.env.WS_PORT || "8080") });
 
   console.log("WebSocket server started on port 8080");
 

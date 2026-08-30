@@ -2,6 +2,7 @@ import { WebSocket } from "ws";
 import type { IncomingMessage } from "../types/index.js";
 import { AddClient, getClientBySocket, getClientsInRoom } from "./roomManager.js";
 import prisma from "../config/db.js";
+import { publisher, subscriber } from "../config/redis.js";
 
 export async  function handleMessage(socket: WebSocket, rawMessage: string,username: string) {
   
@@ -45,6 +46,9 @@ async function handleJoin(socket: WebSocket, roomId: string, username: string) {
 
   // Now add the new person
   AddClient(socket, roomId, username);
+
+   await subscriber.subscribe(roomId);
+
 let messageHistory: any[] = [];
 try {
   const messages = await prisma.message.findMany({
@@ -82,24 +86,18 @@ try {
   );
 
   // Tell everyone else someone joined
-  roomMembers.forEach((client) => {
-    if (client.socket !== socket) {
-      client.socket.send(
-        JSON.stringify({
-          type: "USER_JOINED",
-          payload: {
-            username,
-            message: `${username} joined the room`,
-          },
-        })
-      );
-    }
-  });
+ await publisher.publish(roomId, JSON.stringify({
+  type: "USER_JOINED",
+  payload: {
+    username,
+    message: `${username} joined the room`,
+  },
+}));
 }
 
 async function handleChat(socket: WebSocket, message: string, username: string) {
   
-   const sender = getClientBySocket(socket);
+  const sender = getClientBySocket(socket);
 
   if (!sender) {
     socket.send(
@@ -109,32 +107,27 @@ async function handleChat(socket: WebSocket, message: string, username: string) 
   }
 
   // Save message to database
-  await prisma.message.create({
-    data: {
-      text: message,
-      sender: {
-        connect: { username: username }
-      },
-      room: {
-        connect: { roomId: sender.roomId }
+  try {
+    await prisma.message.create({
+      data: {
+        text: message,
+        sender: { connect: { username: username } },
+        room: { connect: { roomId: sender.roomId } }
       }
-    }
-  });
+    });
+  } catch (error) {
+    console.log("Failed to save message:", error);
+  }
 
-  // Broadcast to everyone in the room
-  const roomMembers = getClientsInRoom(sender.roomId);
-   roomMembers.forEach((client) => {
-    client.socket.send(
-      JSON.stringify({
-        type: "CHAT",
-        payload: {
-          username: username,
-          message,
-          timestamp: new Date().toISOString(),
-        },
-      })
-    );
-  });
+  // Publish to Redis channel instead of broadcasting directly
+  await publisher.publish(sender.roomId, JSON.stringify({
+    type: "CHAT",
+    payload: {
+      username,
+      message,
+      timestamp: new Date().toISOString(),
+    }
+  }));
 }
 
 
@@ -179,3 +172,13 @@ function handleStopTyping(socket: WebSocket, username: string) {
     }
   });
 }
+
+
+// Listen for messages from Redis and deliver to clients in that room
+subscriber.on("message", (channel, message) => {
+  const roomMembers = getClientsInRoom(channel);
+  
+  roomMembers.forEach((client) => {
+    client.socket.send(message);
+  });
+});
