@@ -25,3 +25,11 @@ app.listen(PORT, () => {
 
 // Start WebSocket server
 startWebSocketServer();
+
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err.type === 'entity.parse.failed') {
+    res.status(400).json({ message: "Invalid JSON body" });
+    return;
+  }
+  next(err);
+});

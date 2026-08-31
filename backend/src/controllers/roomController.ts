@@ -11,27 +11,33 @@ function generateRoomCode(): string {
 export async function createRoom(req: AuthRequest, res: Response) {
   try {
     const userId = req.userId;
+    const { isPrivate, roomName } = req.body;
 
     if (!userId) {
       res.status(401).json({ message: "Unauthorized" });
       return;
     }
 
-    // Generate unique room code
+    if (!roomName) {
+      res.status(400).json({ message: "Room name is required" });
+      return;
+    }
+
     const roomId = generateRoomCode();
 
-    // Create room in database
     const room = await prisma.room.create({
       data: {
         roomId,
+        roomName,
         createdById: userId,
-        isPrivate: req.body.isPrivate ?? false,
+        isPrivate: isPrivate ?? false,
       },
     });
 
     res.status(201).json({
       message: "Room created successfully",
       roomId: room.roomId,
+      roomName: room.roomName,
       isPrivate: room.isPrivate,
     });
 
@@ -39,7 +45,6 @@ export async function createRoom(req: AuthRequest, res: Response) {
     res.status(500).json({ message: "Something went wrong" });
   }
 }
-
 // Join a room
 export async function joinRoom(req: AuthRequest, res: Response) {
   try {
@@ -71,7 +76,6 @@ export async function joinRoom(req: AuthRequest, res: Response) {
   }
 }
 
-// Get all public rooms
 export async function getRooms(req: Request, res: Response) {
   try {
     const rooms = await prisma.room.findMany({
@@ -80,6 +84,9 @@ export async function getRooms(req: Request, res: Response) {
         createdBy: {
           select: { username: true },
         },
+        _count: {
+          select: { messages: true }
+        }
       },
       orderBy: { createdAt: "desc" },
     });

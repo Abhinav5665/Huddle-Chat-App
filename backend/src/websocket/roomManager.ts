@@ -24,7 +24,13 @@ export function getClientsInRoom(roomId:string):Client[]{
 export function getClientBySocket(socket:WebSocket):Client|undefined{
     return Clients.get(socket);
 }
-
+export function getRoomUserCount(roomId: string): number {
+  let count = 0;
+  Clients.forEach((client) => {
+    if (client.roomId === roomId) count++;
+  });
+  return count;
+}
 
 
 
