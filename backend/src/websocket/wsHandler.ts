@@ -85,7 +85,6 @@ try {
     })
   );
 
-  // Tell everyone else someone joined
  await publisher.publish(roomId, JSON.stringify({
   type: "USER_JOINED",
   payload: {

@@ -10,6 +10,11 @@ export async function signup(req: Request, res: Response) {
   try {
     const { username, password } = req.body;
 
+    if (typeof password !== "string" || typeof username !== "string") {
+  res.status(400).json({ message: "Username and password must be strings" });
+  return;
+}
+
     // Check if username already exists
     const existingUser = await prisma.user.findUnique({
       where: { username },
@@ -47,6 +52,11 @@ export async function signup(req: Request, res: Response) {
 export async function login(req: Request, res: Response) {
   try {
     const { username, password } = req.body;
+
+    if (typeof password !== "string" || typeof username !== "string") {
+  res.status(400).json({ message: "Username and password must be strings" });
+  return;
+}
 
     // Check if username and password are provided
     if (!username || !password) {
