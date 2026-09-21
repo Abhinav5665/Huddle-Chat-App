@@ -47,6 +47,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         setOnlineUsers(data.payload.onlineUsers);
         setMessageHistory(data.payload.messageHistory);
         setMessages([]);
+         setTypingUsers([]);
       }
 
       if (data.type === "CHAT") {
@@ -54,7 +55,10 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       }
 
     if (data.type === "USER_JOINED") {
-  setOnlineUsers((prev) => [...prev, data.payload.username]);
+  setOnlineUsers((prev) => {
+    if (prev.includes(data.payload.username)) return prev;
+    return [...prev, data.payload.username];
+  });
   setMessages((prev) => [
     ...prev,
     {
