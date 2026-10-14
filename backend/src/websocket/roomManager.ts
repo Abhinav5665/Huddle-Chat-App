@@ -32,6 +32,13 @@ export function getRoomUserCount(roomId: string): number {
   return count;
 }
 
+// Remove every local client from a room (used when the room is deleted)
+export function removeClientsInRoom(roomId: string) {
+  for (const [socket, client] of Clients) {
+    if (client.roomId === roomId) Clients.delete(socket);
+  }
+}
+
 
 
 

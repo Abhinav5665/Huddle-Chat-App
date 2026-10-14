@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useWebSocket } from "../context/webSocketContext.tsx";
 import { useAuth } from "../context/AuthContext.tsx";
+import { getOlderMessages } from "../services/messageService.ts";
 
 function getInitials(username: string) {
   return username.slice(0, 2).toUpperCase();
@@ -37,7 +38,7 @@ function formatTime(timestamp: string) {
 export default function ChatPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
-  const { username } = useAuth();
+  const { username, token } = useAuth();
   const {
     messages,
     messageHistory,
@@ -45,17 +46,77 @@ export default function ChatPage() {
     typingUsers,
     sendMessage,
     isConnected,
+    roomDeleted,
+    resetRoomDeleted,
+    roomOwner,
+    hasMore,
+    prependHistory,
   } = useWebSocket();
 
   const [input, setInput] = useState("");
   const [copied, setCopied] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
-  // Scroll to bottom when new messages arrive
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set right before older messages are fetched, so we can keep the scroll position
+  const prevScrollHeight = useRef<number | null>(null);
+
+  // Scroll to bottom when a new live message arrives
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages.length]);
+
+  // History changed: either older messages were prepended (keep position)
+  // or this is the initial load from JOINED (jump to bottom)
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    if (prevScrollHeight.current !== null) {
+      el.scrollTop += el.scrollHeight - prevScrollHeight.current;
+      prevScrollHeight.current = null;
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messageHistory]);
+
+  // Room deleted by its owner
+  useEffect(() => {
+    if (roomDeleted) {
+      alert("This room was deleted by its owner.");
+      resetRoomDeleted();
+      navigate("/lobby");
+    }
+  }, [roomDeleted, navigate, resetRoomDeleted]);
+
+  async function loadOlder() {
+    const oldest = messageHistory[0];
+    if (loadingOlder || !hasMore || !oldest?.id || !token || !roomId) return;
+
+    setLoadingOlder(true);
+    try {
+      prevScrollHeight.current = containerRef.current?.scrollHeight ?? null;
+      const { messages: older, hasMore: more } = await getOlderMessages(
+        roomId,
+        oldest.id,
+        token
+      );
+      prependHistory(older, more);
+    } catch (err) {
+      prevScrollHeight.current = null;
+      console.log("Failed to load older messages", err);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
+
+  function handleScroll() {
+    if (containerRef.current && containerRef.current.scrollTop < 80) {
+      loadOlder();
+    }
+  }
 
   function handleSend() {
     if (!input.trim()) return;
@@ -93,8 +154,14 @@ export default function ChatPage() {
 
   const allMessages = [...messageHistory, ...messages];
 
+  // Sidebar order: owner (only if online) first, then you, then everyone else
+  const me = username || "";
+  const members = Array.from(new Set([me, ...onlineUsers])).filter(Boolean);
+  const rank = (u: string) => (u === roomOwner ? 0 : u === me ? 1 : 2);
+  members.sort((a, b) => rank(a) - rank(b));
+
   return (
-   <div className="h-screen bg-gray-950 text-white flex flex-col overflow-hidden">
+    <div className="h-screen bg-gray-950 text-white flex flex-col overflow-hidden">
 
       {/* Header */}
       <div className="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between flex-shrink-0">
@@ -121,8 +188,8 @@ export default function ChatPage() {
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-400" : "bg-red-400"}`} />
           <span className="text-gray-400 text-sm">
-  {onlineUsers.filter(u => u !== username).length + 1} online
-</span>
+            {members.length} online
+          </span>
         </div>
       </div>
 
@@ -130,9 +197,18 @@ export default function ChatPage() {
       <div className="flex flex-1 overflow-hidden">
 
         {/* Messages */}
-        {/* Messages */}
-<div className="flex-1 flex flex-col overflow-hidden">
-<div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 hide-scrollbar">
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div
+            ref={containerRef}
+            onScroll={handleScroll}
+            className="flex-1 overflow-y-auto px-6 py-4 space-y-4 hide-scrollbar"
+          >
+
+            {loadingOlder && (
+              <div className="text-center text-gray-500 text-xs py-1">
+                Loading older messages…
+              </div>
+            )}
 
             {allMessages.length === 0 && (
               <div className="text-center text-gray-600 mt-20">
@@ -141,20 +217,21 @@ export default function ChatPage() {
               </div>
             )}
 
-          {allMessages.map((msg, index) => {
-  const isMe = msg.username === username;
-  const isSystem = msg.username === "system";
+            {allMessages.map((msg, index) => {
+              const isMe = msg.username === username;
+              const isSystem = msg.username === "system";
+              const key = msg.id ?? `live-${index - messageHistory.length}`;
 
-  if (isSystem) {
-    return (
-      <div key={index} className="text-center text-gray-500 text-xs py-1">
-        {msg.message}
-      </div>
-    );
-  }
+              if (isSystem) {
+                return (
+                  <div key={key} className="text-center text-gray-500 text-xs py-1">
+                    {msg.message}
+                  </div>
+                );
+              }
               return (
                 <div
-                  key={index}
+                  key={key}
                   className={`flex items-start gap-3 ${isMe ? "flex-row-reverse" : ""}`}
                 >
                   {/* Avatar */}
@@ -163,18 +240,18 @@ export default function ChatPage() {
                   </div>
 
                   {/* Message bubble */}
-                 <div className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                  <div className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
                     <div className={`flex items-center gap-2 mb-1 ${isMe ? "flex-row-reverse" : ""}`}>
                       <span className="text-xs text-gray-400 font-medium">{msg.username}</span>
                       <span className="text-xs text-gray-600">{formatTime(msg.timestamp)}</span>
                     </div>
                     <div className={`px-4 py-2 rounded-2xl text-sm break-words whitespace-pre-wrap max-w-[280px] md:max-w-[400px] ${
-  isMe
-    ? "bg-violet-600 text-white rounded-br-none"
-    : "bg-gray-800 text-gray-100 rounded-bl-none"
-}`}>
-  {msg.message}
-</div>
+                      isMe
+                        ? "bg-violet-600 text-white rounded-br-none"
+                        : "bg-gray-800 text-gray-100 rounded-bl-none"
+                    }`}>
+                      {msg.message}
+                    </div>
                   </div>
                 </div>
               );
@@ -221,29 +298,31 @@ export default function ChatPage() {
             Online Users
           </h3>
           <div className="space-y-2">
-            {/* Current user */}
-            <div className="flex items-center gap-2">
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${getAvatarColor(username || "")}`}>
-                {getInitials(username || "?")}
-              </div>
-              <div>
-                <p className="text-sm font-medium">{username}</p>
-                <p className="text-xs text-violet-400">You</p>
-              </div>
-              <span className="w-2 h-2 bg-green-400 rounded-full ml-auto" />
-            </div>
-
-            {onlineUsers
-  .filter((user) => user !== username)
-  .map((user) => (
-    <div key={user} className="flex items-center gap-2">
-      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${getAvatarColor(user)}`}>
-        {getInitials(user)}
-      </div>
-      <p className="text-sm font-medium">{user}</p>
-      <span className="w-2 h-2 bg-green-400 rounded-full ml-auto" />
-    </div>
-  ))}
+            {members.map((user) => {
+              const isOwner = user === roomOwner;
+              const isYou = user === me;
+              return (
+                <div key={user} className="flex items-center gap-2">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${getAvatarColor(user)}`}>
+                    {getInitials(user)}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {isOwner && <span title="Room owner">👑 </span>}
+                      {user}
+                    </p>
+                    {(isOwner || isYou) && (
+                      <p className="text-xs text-violet-400">
+                        {isOwner && "Owner"}
+                        {isOwner && isYou && " · "}
+                        {isYou && "You"}
+                      </p>
+                    )}
+                  </div>
+                  <span className="w-2 h-2 bg-green-400 rounded-full ml-auto flex-shrink-0" />
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

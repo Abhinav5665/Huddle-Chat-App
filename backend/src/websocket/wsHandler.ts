@@ -1,6 +1,6 @@
 import { WebSocket } from "ws";
 import type { IncomingMessage } from "../types/index.js";
-import { AddClient, getClientBySocket, getClientsInRoom } from "./roomManager.js";
+import { AddClient, getClientBySocket, getClientsInRoom, removeClientsInRoom } from "./roomManager.js";
 import prisma from "../config/db.js";
 import { publisher, subscriber } from "../config/redis.js";
 
@@ -17,7 +17,8 @@ export async  function handleMessage(socket: WebSocket, rawMessage: string,usern
 
   // Route to the right handler based on message type
   if (data.type === "join") {
-    handleJoin(socket, data.payload.roomId, username);
+
+    await handleJoin(socket, data.payload.roomId, username);
     return;
   }
 
@@ -39,59 +40,81 @@ if (data.type === "stop_typing") {
 
 
 async function handleJoin(socket: WebSocket, roomId: string, username: string) {
+  roomId = String(roomId ?? "").trim().toUpperCase();
 
-  // Get everyone BEFORE adding the new person
-  const roomMembers = getClientsInRoom(roomId);
-  const onlineUsers = roomMembers.map((client) => client.username);
+  // 1. Verify the room exists and get its owner
+  let room;
+  try {
+    room = await prisma.room.findUnique({
+      where: { roomId },
+      select: {
+        roomName: true,
+        createdBy: { select: { username: true } },
+      },
+    });
+  } catch (error) {
+    console.log("Failed to look up room:", error);
+    socket.send(JSON.stringify({ type: "ERROR", message: "Could not join room" }));
+    return;
+  }
 
-  // Now add the new person
+  if (!room) {
+    socket.send(JSON.stringify({ type: "ERROR", message: "Room not found" }));
+    return;
+  }
+
+  // 2. Get everyone BEFORE adding the new person
+  const onlineUsers = getClientsInRoom(roomId).map((c) => c.username);
+
   AddClient(socket, roomId, username);
+  await subscriber.subscribe(roomId);
 
-   await subscriber.subscribe(roomId);
-
-let messageHistory: any[] = [];
+  let messageHistory: any[] = [];
+let hasMore = false;
 try {
-  const messages = await prisma.message.findMany({
-    where: { room: { roomId: roomId } },
-    orderBy: { createdAt: "asc" },
-    take: 50,
-    include: {
-      sender: {
-        select: { username: true }
-      }
-    }
+  const rows = await prisma.message.findMany({
+    where: { room: { roomId } },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 51,
+    include: { sender: { select: { username: true } } },
   });
-  messageHistory = messages.map((msg) => ({
-    username: msg.sender.username,
-    message: msg.text,
-    timestamp: msg.createdAt,
-  }));
+  hasMore = rows.length > 50;
+  messageHistory = rows
+    .slice(0, 50)
+    .reverse()
+    .map((msg) => ({
+      id: msg.id,
+      username: msg.sender.username,
+      message: msg.text,
+      timestamp: msg.createdAt,
+    }));
 } catch (error) {
   console.log("Failed to fetch message history:", error);
 }
 
-  // Send confirmation + online users + message history
   socket.send(
     JSON.stringify({
       type: "JOINED",
       payload: {
         roomId,
+        roomName: room.roomName,
+        createdBy: room.createdBy.username, // owner badge
         username,
         message: `You joined room ${roomId} as ${username}`,
         onlineUsers,
         messageHistory,
-        
+        hasMore,
       },
     })
   );
 
- await publisher.publish(roomId, JSON.stringify({
-  type: "USER_JOINED",
-  payload: {
-    username,
-    message: `${username} joined the room`,
-  },
-}));
+  await publisher.publish(
+    roomId,
+    JSON.stringify({
+      type: "USER_JOINED",
+      payload: { username, message: `${username} joined the room` },
+    })
+  );
 }
 
 async function handleChat(socket: WebSocket, message: string, username: string) {
@@ -175,9 +198,19 @@ function handleStopTyping(socket: WebSocket, username: string) {
 
 // Listen for messages from Redis and deliver to clients in that room
 subscriber.on("message", (channel, message) => {
-  const roomMembers = getClientsInRoom(channel);
-  
-  roomMembers.forEach((client) => {
+  // Deliver to everyone on this server in that room
+  getClientsInRoom(channel).forEach((client) => {
     client.socket.send(message);
   });
+
+  // If the room was deleted, clean up this server's state
+  try {
+    const parsed = JSON.parse(message);
+    if (parsed.type === "ROOM_DELETED") {
+      removeClientsInRoom(channel);
+      subscriber.unsubscribe(channel);
+    }
+  } catch {
+    // ignore malformed messages
+  }
 });
